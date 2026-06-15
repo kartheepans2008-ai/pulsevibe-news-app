@@ -1,0 +1,106 @@
+import feedparser
+import pandas as pd
+from textblob import TextBlob
+import os
+import time
+
+# 1. FASTER, STABLE ENDPOINTS (Google News and CNN update constantly)
+rss_feeds = [
+    {"field": "Technology", "source": "Google Tech", "url": "https://news.google.com/rss/search?q=technology&hl=en-US&gl=US&ceid=US:en"},
+    {"field": "Business", "source": "Google Biz", "url": "https://news.google.com/rss/search?q=business&hl=en-US&gl=US&ceid=US:en"},
+    {"field": "Politics", "source": "Google Politics", "url": "https://news.google.com/rss/search?q=politics&hl=en-US&gl=US&ceid=US:en"},
+    {"field": "World", "source": "CNN World", "url": "http://rss.cnn.com/rss/edition_world.rss"},
+    {"field": "Science", "source": "Google Science", "url": "https://news.google.com/rss/search?q=science&hl=en-US&gl=US&ceid=US:en"}
+]
+
+csv_filename = "live_news_dataset.csv"
+
+def fetch_and_update_news():
+    print(f"\n⚡ [{time.strftime('%H:%M:%S')}] Connecting to live streams...")
+    
+    # Check your workspace directory for the tracking sheet
+    if os.path.exists(csv_filename):
+        try:
+            existing_df = pd.read_csv(csv_filename)
+            existing_headlines = set(existing_df["Headline"].astype(str).tolist())
+        except Exception:
+            existing_df = pd.DataFrame(columns=["Headline", "Summary", "Field", "Source", "Sentiment", "Timestamp"])
+            existing_headlines = set()
+    else:
+        existing_df = pd.DataFrame(columns=["Headline", "Summary", "Field", "Source", "Sentiment", "Timestamp"])
+        existing_headlines = set()
+
+    new_rows = []
+    total_scanned_this_run = 0
+
+    for target in rss_feeds:
+        field = target["field"]
+        source = target["source"]
+        url = target["url"]
+        
+        try:
+            feed = feedparser.parse(url)
+            
+            # If a feed structure is blocked or empty, report it immediately
+            if not feed.entries:
+                print(f"⚠️ Notice: {source} feed returned 0 entries right now. Checking others...")
+                continue
+                
+            for entry in feed.entries:
+                total_scanned_this_run += 1
+                headline = entry.get('title', '').strip()
+                summary = entry.get('summary', '').strip()
+                published = entry.get('published', time.strftime('%Y-%m-%d %H:%M:%S'))
+                
+                # Check if it's completely brand new data
+                if headline not in existing_headlines and headline != '':
+                    
+                    # Sentiment Engine (Slightly relaxed boundaries to classify better)
+                    analysis = TextBlob(headline)
+                    polarity = analysis.sentiment.polarity
+                    
+                    if polarity > 0.0:
+                        sentiment = "Good"
+                        badge = "🟢 [GOOD]"
+                    elif polarity < 0.0:
+                        sentiment = "Bad"
+                        badge = "🔴 [BAD]"
+                    else:
+                        sentiment = "Neutral"
+                        badge = "⚪ [NEUTRAL]"
+                    
+                    # PRINT INSTANTLY TO YOUR TERMINAL
+                    print(f"{badge} | {field:<12} | {headline[:80]}...")
+                    
+                    new_rows.append({
+                        "Headline": headline,
+                        "Summary": summary,
+                        "Field": field,
+                        "Source": source,
+                        "Sentiment": sentiment,
+                        "Timestamp": published
+                    })
+                    existing_headlines.add(headline)
+                    
+        except Exception as e:
+            print(f"❌ Error connecting to {source}: {e}")
+            continue
+
+    # Commit data adjustments directly to file
+    if new_rows:
+        new_df = pd.DataFrame(new_rows)
+        updated_df = pd.concat([existing_df, new_df], ignore_index=True)
+        updated_df.to_csv(csv_filename, index=False)
+        print(f"\n🎉 Success! Added {len(new_rows)} new stories to your local database.")
+        print(f"📊 Total Dataset Volume inside VS Code: {len(updated_df)} unique records.")
+    else:
+        print(f"💤 Scan finished. Read {total_scanned_this_run} total entries, but all of them were already stored in your CSV file.")
+
+# Run immediately, then check back frequently
+try:
+    while True:
+        fetch_and_update_news()
+        print("\n⏳ Next check in 3 minutes. Leave this terminal running to catch live breaks...")
+        time.sleep(180) # Shortened to 3 minutes for faster streaming feedback
+except KeyboardInterrupt:
+    print("\n🛑 Collection stopped cleanly.")
